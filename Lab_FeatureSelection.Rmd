@@ -1,0 +1,131 @@
+---
+title: "Feature Selection Lab"
+author: "Emily Bellis"
+date: "6/14/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Set-up 
+This lab is adapted from the [Chp. 6](https://hastie.su.domains/ISLR2/Labs/Rmarkdown_Notebooks/Ch6-varselect-lab.html) lab of Introduction to Statistical Learning, except we go a bit more in depth into PCA.
+
+Load (and if necessary, install) the following packages:
+```{r, message=F}
+library(ISLR2)  # for the Hitters dataset
+library(pls)    # to implement principal components regression
+library(tidyverse)  # for visualization and tidying
+```
+
+## Preprocessing and data exploration
+Let's take a look at the example dataset. We'll try to predict Salary of a baseball player on the basis of various statistics associated with their performance in the previous year.
+```{r}
+data(Hitters)
+dim(Hitters)
+names(Hitters)
+?Hitters
+sum(is.na(Hitters$Salary))
+```
+
+It appears we are missing values of salary for `r sum(is.na(Hitters$Salary))` players, let's update the the dataframe to drop `NA` values.
+```{r}
+Hitters <- na.omit(Hitters) # will remove rows with an NA in any column
+```
+
+PCA is also not really the best choice of method for dealing with categorical factors. Let's just drop these for now. 
+```{r}
+str(Hitters)
+Hitters <- Hitters %>% select(-c(League, Division, NewLeague)) # remove these three columns
+dim(Hitters)
+```
+
+Let's also get a feel for the mean and variance in each of the remaining predictors. Unless features are measured in the same units, we usually scale each variable so that one variable doesn't dominate over the others, just because it is measured on a different scale.
+```{r}
+apply(Hitters, 2, mean) # means
+apply(Hitters, 2, var)  # variances
+```
+
+## Carrying out the PCA 
+We can carry out PCA using `prcomp` from base R
+```{r}
+pr.out <- prcomp(Hitters, scale = T) # scale to have s.d. = 1; values are also centered to have mean zero by default 
+```
+
+Let's get a look at the fitted `pr.out` object
+```{r}
+names(pr.out)
+```
+
+The `center` and `scale` components correspond to the means and standard deviations prior to implementing PCA.
+```{r}
+pr.out$center
+pr.out$scale
+```
+
+The `rotation` matrix provides the principal component loadings; each column of `pr.out$rotation` contains the corresponding PC loading vector. Note there are `r ncol(pr.out$rotation)` distinct PCs. This is to be expected since there are in general $min(n - 1, p)$ in a dataset with $n$ observations and $p$ variables.
+```{r, eval=F}
+pr.out$rotation
+```
+
+We can also get the principal component scores:
+```{r, eval=F}
+pr.out$x
+```
+
+## Plotting PCA Results
+Many functions and packages exist to plot results of PCA; personally I like to extract the PC scores and create a new dataframe to visualize w/`ggplot` :)
+```{r}
+df <- cbind.data.frame(Salary = Hitters$Salary, 
+                       PC1 = pr.out$x[,1],
+                       PC2 = pr.out$x[,2])
+ggplot(df, aes(x = PC1, y = PC2, col = Salary)) +
+  geom_point() +
+  theme_classic() +
+  scale_color_viridis_c()
+```
+
+## Proportion of Variation Explained
+The `prcomp` object also contains the standard deviation of each PC.
+```{r}
+pr.out$sdev
+pr.var <- pr.out$sdev^2
+pr.var
+```
+
+These values can be used to calculate the percent variation explained by each PC axis:
+```{r}
+pve <- pr.var/sum(pr.var)
+pve
+plot(pve, xlab = "Principal Component", 
+     ylab = "Proportion of Variance Explained",
+     ylim = c(0,1),
+     type = "b")
+```
+
+## Principal Components Regression 
+ Let's first split the dataset into a portion of the data for training, and a separate hold-out set of 70% of the data for testing.
+```{r}
+set.seed(1) # so result we get the same results for randomization
+train <- sample(1:nrow(Hitters), nrow(Hitters)*.7)
+test <- (-train)
+```
+
+If we want to carry out principal components regression directly, we can use the `pcr` function from the `pls` package to carry out both PCA and regression at once. It  even carries out 10-fold cross-validation for each value of *M* (number of PCs used).  
+
+How many principal components should we use to make the final prediction?
+```{r}
+pcr.fit <- pcr(Salary ~ ., data = Hitters, scale = T, subset = train, validation = "CV")
+
+summary(pcr.fit)
+
+validationplot(pcr.fit, val.type = "RMSEP") # plot cross-validation Root Mean Squared Error
+```
+
+Determine the test MSE as follows:
+```{r}
+pcr.pred <- predict(pcr.fit, Hitters[test,], ncomp = 4) # if we choose to include the first four PCs
+mean((pcr.pred - Hitters[test,]$Salary)^2)
+```
+
